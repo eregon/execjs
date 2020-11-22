@@ -384,7 +384,7 @@ class TestExecJS < Test
     end
   end
 
-  def test_babel
+  def test_babel # actually works if run alone (with -ntest_babel) but fails otherwise due to no context isolation
     skip if ExecJS.runtime.is_a?(ExecJS::RubyRhinoRuntime)
 
     assert source = File.read(File.expand_path("../fixtures/babel.js", __FILE__))

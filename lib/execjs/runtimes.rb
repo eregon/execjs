@@ -5,6 +5,7 @@ require "execjs/external_runtime"
 require "execjs/ruby_racer_runtime"
 require "execjs/ruby_rhino_runtime"
 require "execjs/mini_racer_runtime"
+require "execjs/graaljs_runtime"
 
 module ExecJS
   module Runtimes
@@ -17,6 +18,8 @@ module ExecJS
     RubyRhino = RubyRhinoRuntime.new
 
     MiniRacer = MiniRacerRuntime.new
+
+    GraalJS = GraalJSRuntime.new
 
     Node = ExternalRuntime.new(
       name:        "Node.js (V8)",
@@ -85,6 +88,7 @@ module ExecJS
         RubyRhino,
         Duktape,
         MiniRacer,
+        GraalJS,
         Node,
         JavaScriptCore,
         SpiderMonkey,
