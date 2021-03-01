@@ -2,124 +2,95 @@ require "execjs/runtime"
 
 module ExecJS
   class GraalJSRuntime < Runtime
-    # TODO: the contexts should actually be isolated, e.g. with Truffle inner contexts
     class Context < Runtime::Context
       def initialize(runtime, source = "", options = {})
+        @context = ::Truffle::Interop.new_inner_context
+
         source = encode(source)
 
         @source = source
         unless source.empty?
-          translate do
-            eval_in_context(source)
-          end
+          eval_in_context(source)
         end
       end
 
       def exec(source, options = {})
         source = encode(source)
-        source = "(function(){#{source}})()" if /\S/.match?(source)
         source = "#{@source};\n#{source}" unless @source.empty?
 
-        translate do
-          eval_in_context(source)
-        end
+        eval_in_context(source)
       end
 
       def eval(source, options = {})
         source = encode(source)
+
+        # if /\S/ =~ source
+        #   exec("return eval(#{::JSON.generate("(#{source})", quirks_mode: true)})")
+        # end
+
         source = "(#{source})" if /\S/.match?(source)
+        source = "return #{source}"
         source = "#{@source};\n#{source}" unless @source.empty?
 
-        translate do
-          eval_in_context(source)
-        end
+        eval_in_context(source)
       end
 
       def call(source, *args)
-        source = encode(source)
-        source = "(#{source})" if /\S/.match?(source)
-        source = "#{@source};\n#{source}" unless @source.empty?
-
-        translate do
-          function = eval_in_context(source)
-          function.call(*convert_ruby_to_js(args))
-        end
+        eval "#{source}.apply(this, #{::JSON.generate(args)})"
       end
 
       private
 
-      def translate
-        begin
-          convert_js_to_ruby yield
-        rescue ::RuntimeError => e
-          if e.message.start_with?('SyntaxError:')
-            error_class = ExecJS::RuntimeError
-          else
-            error_class = ExecJS::ProgramError
-          end
+      def eval_in_context(code)
+        code = <<-JS
+          (function(program, execJS) { return execJS(program) })(function() { #{code}
+          }, function(program) {
+            try {
+              delete this.console;
+              var result = program();
+              if (typeof result == 'undefined' && result !== null) {
+                return '["ok"]';
+              } else {
+                try {
+                  return JSON.stringify(['ok', result]);
+                } catch (err) {
+                  return JSON.stringify(['err', '' + err, err.stack]);
+                }
+              }
+            } catch (err) {
+              return JSON.stringify(['err', '' + err, err.stack]);
+            }
+          })
+        JS
 
-          backtrace = e.backtrace.map { |line| line.sub('(eval)', '(execjs)') }
+        begin
+          result = ::Truffle::Interop.eval_in_inner_context(@context, 'js', code)
+        rescue ::RuntimeError => e
+          error_class = e.message.start_with?('SyntaxError:') ? ExecJS::RuntimeError : ExecJS::ProgramError
+          line = e.message[/\(eval\):(\d+)/, 1] || 1
+          backtrace = ["(execjs):#{line}"] + e.backtrace.map { |line| line.sub('(eval)', '(execjs)') }
           raise error_class, e.message, backtrace
         end
+
+        extract_result(result.to_s)
       end
 
-      def convert_js_to_ruby(value)
-        case value
-        when true, false, Integer, Float
+      def extract_result(output)
+        raise if output.empty?
+        status, value, stack = ::JSON.parse(output, create_additions: false)
+        if status == "ok"
           value
         else
-          if value.nil?
-            nil
-          elsif value.respond_to?(:call)
-            nil
-          elsif value.respond_to?(:to_str)
-            value.to_str
-          elsif value.respond_to?(:to_ary)
-            value.to_ary.map do |e|
-              if e.respond_to?(:call)
-                nil
-              else
-                convert_js_to_ruby(e)
-              end
-            end
-          elsif Truffle::Interop.has_members?(value)
-            object = value
-            h = {}
-            Truffle::Interop.members(object).each do |member|
-              if Truffle::Interop.member_readable?(object, member)
-                v = Truffle::Interop.read_member(object, member)
-                unless v.respond_to?(:call)
-                  h[convert_js_to_ruby(member)] = convert_js_to_ruby(v)
-                end
-              end
-            end
-            h
-          else
-            raise TypeError, "Unknown how to convert to Ruby: #{value.inspect}"
+          stack ||= ""
+          stack = stack.lines.map do |line|
+            line.sub(" at ", "").sub('(eval)', '(execjs)').strip
           end
+          stack.shift unless stack[0].to_s.include?("(execjs)")
+          error_class = value =~ /SyntaxError:/ ? ExecJS::RuntimeError : ExecJS::ProgramError
+          backtrace = stack + caller
+          raise error_class, value, backtrace
         end
       end
-
-      def convert_ruby_to_js(value)
-        case value
-        when nil, true, false, Integer, Float, String
-          value
-        when Array
-          value.map { |e| convert_ruby_to_js(e) }
-        when Hash
-          h = {}
-          value.each_pair do |k,v|
-            h[convert_ruby_to_js(k)] = convert_ruby_to_js(v)
-          end
-          Truffle::Interop.hash_keys_as_members(h)
-        else
-          raise TypeError, "Unknown how to convert to JS: #{value.inspect}"
-        end
-      end
-
-      class_eval <<-RUBY, "(execjs)", 1
-        def eval_in_context(code); Polyglot.eval('js', code); end
-      RUBY
     end
 
     def name
