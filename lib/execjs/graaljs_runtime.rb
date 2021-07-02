@@ -5,6 +5,9 @@ module ExecJS
     # TODO: the contexts should actually be isolated, e.g. with Truffle inner contexts
     class Context < Runtime::Context
       def initialize(runtime, source = "", options = {})
+        @context = ::Truffle::Interop.new_inner_context
+        ::Truffle::Interop.eval_in_inner_context(@context, 'js', 'delete this.console')
+
         source = encode(source)
 
         @source = source
@@ -117,8 +120,8 @@ module ExecJS
         end
       end
 
-      class_eval <<-RUBY, "(execjs)", 1
-        def eval_in_context(code); Polyglot.eval('js', code); end
+      class_eval <<-'RUBY', "(execjs)", 1
+        def eval_in_context(code); ::Truffle::Interop.eval_in_inner_context(@context, 'js', code); end
       RUBY
     end
 
